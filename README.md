@@ -22,8 +22,8 @@ https://github.com/bjarne-hansen/nrf24-time-server
  
     Wiring:
 
-    I always use the same colour code for the wires connecting the RF24 modules. It seems that the colours below are popular in many
-    articles on the RF24 module.
+    I always use the same colour code for the wires connecting the RF24 modules. 
+    It seems that the colours below are popular in many articles on the RF24 module.
 
     NRF24L01, PIN side.
     +---+----------------------
