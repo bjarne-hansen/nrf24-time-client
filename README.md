@@ -51,10 +51,9 @@ https://github.com/bjarne-hansen/nrf24-time-server
     6   MOSI  blue    <--->   15     11 
     7   MISO  purple  <--->   16     12 
     8   IRQ           <--->   N/C    - 
- 
-   
-    DS3231       NANO
-   ----------------------
+    
+      DS3231     NANO
+    ----------------------
      GND  <-->   -  GND  
      VCC  <-->   -  3V3
      SDA  <-->  27   A4
