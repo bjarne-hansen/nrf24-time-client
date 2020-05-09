@@ -59,44 +59,52 @@
  *    GND  <-->   -  GND  
  *    VCC  <-->   -  3V3
  *    SDA  <-->  27   A4
- *    SCL  <-->  28   A5
+ *    SCL  <-->  28   A5  
  */
 
 #include <printf.h>
-#include <nRF24L01.h>
-#include <RF24_config.h>
 #include <RF24.h>
-
 #include <TimeLib.h>
-
 #include <DS3232RTC.h>
 
-RF24 radio(9, 10);          // CSN, CE pins
-byte txaddr[6] = "DTP01";   // Address of date/time server.
-byte rxaddr[6] = "DTCLN";   // Client address.
-byte payload[10];           // Payload being received.
+#define DEBUG_PRINT
 
-short a;
-unsigned short b;
-long long c = 123456789;
+#define PIN_LED        8
+#define PIN_RF24_CSN   9
+#define PIN_RF24_CE   10
+
+RF24 radio(PIN_RF24_CE, PIN_RF24_CSN);  // RF24 radio.
+
+byte rx_addr_1[6] = "DTCLI";            // Address to listen to. 
+byte payload[32];                       // Buffer for payload.
+
+time_t last_sync;
 
 void setup() {
-  Serial.begin(9600);
-  printf_begin();
+
+  debug_begin();  
+  debug_println("\n\nInitialising nrf24-time-client.");
+
+  // Initialise LED.
+  debug_println("Initialize LED ...");
+  pinMode(PIN_LED, OUTPUT);         // LED pin is output.
+  digitalWrite(PIN_LED, LOW);       // Turn off LED.
+  flash_led(3, 800, 200);
+
+  debug_println("Initialise RTC module ...");  
+  rtc_setup();
   
-  Serial.println("\n\nExample date/time client.");
-  Serial.println(sizeof(c));
-  // Setup RF24 module for receiving date/time.
-  Serial.println("Configure RF24 module ...");
-  setupDateTimeClient();
+  // Setup RF24 module.
+  debug_println("Configure RF24 module ...");
+  nrf24_client_setup();
 
   // Receive date/time being broadcastet
-  Serial.println("Receiving date/time from server ...");
-  time_t dt = receiveDateTime();
+  debug_println("Receiving date/time from server ...");
+  nrf24_receive_date_time();
+  last_sync = RTC.get();
 
-  // Update the RTC with current date/time
-  setupRTC();
-  updateRTCDateTime(dt);
+  // We are done initialising ...
+  flash_led(3, 200, 800);
 }
 
 void loop() 
@@ -105,16 +113,113 @@ void loop()
   // Get the current date/time from RTC and
   time_t dt;
   dt = RTC.get();
-  Serial.print("The time is now: ");
-  printDateTime(dt);
-  Serial.println();
- 
+
+  // Print the current date/time.
+  debug_print("The time is now: ");
+  debug_print(dt);
+  debug_print(" (");
+  debug_print(dayStr(weekday(dt)));
+  debug_println(").");
+
+  debug_print("Minutes since last sync.: "); debug_println((int)numberOfMinutes(dt - last_sync));
+
+  // Wait for 5 seconds.
   delay(5000);  
 }
 
-void setupRTC()
+
+//
+// NRF24 functions
+//
+
+void nrf24_client_setup()
 {
-  // Setup RTC with basic defaults.
+  radio.begin();
+  radio.setPALevel(RF24_PA_MAX);        
+  radio.setAutoAck(true);               
+  radio.setDataRate(RF24_250KBPS);      
+  radio.setChannel(100);                  
+  radio.enableDynamicPayloads();
+  radio.setPayloadSize(sizeof(payload));             
+  radio.setCRCLength(RF24_CRC_16);      
+  radio.setRetries(5, 15);              
+  radio.openReadingPipe(1, rx_addr_1);  
+  radio.stopListening();  
+}
+
+boolean nrf24_receive(int timeout)
+{
+  unsigned long started;
+  boolean timed_out;
+  boolean result;
+  
+  radio.startListening();
+    
+  // Check if data is available, or  we pass the timeout.
+  timed_out = false;
+  started = millis();
+  while (!radio.available())
+  {
+    if (millis() - started > timeout)
+    {
+      timed_out = true;
+      break;
+    }
+  }
+
+  if (!timed_out)
+  {
+    // Data available ... read it ...
+    radio.read(&payload, sizeof(payload));
+    result = true;
+  }
+  else
+    result = false;   
+
+  radio.stopListening();
+  return result;
+}
+
+void nrf24_receive_date_time()
+{
+  unsigned int count = 0;
+  
+  while (true)
+  {
+    if (nrf24_receive(1000))
+    {
+      if (rtc_set_time_from_payload())
+      {
+        debug_print('+');
+        break;
+      }
+      else
+      {
+        debug_print('-');  
+        flash_led(5, 10, 10);
+      }
+    }
+    else
+    {
+      debug_print('.');
+      flash_led(1, 50, 50);
+    }
+    count++;
+    if (count == 30)
+    {
+      debug_println();
+      count = 0;
+    }
+  }
+  debug_println();
+}
+
+
+//
+// RTC functions
+//
+void rtc_setup()
+{
   RTC.setAlarm(ALM1_MATCH_DATE, 0, 0, 0, 1);
   RTC.setAlarm(ALM2_MATCH_DATE, 0, 0, 0, 1);
   RTC.alarm(ALARM_1);
@@ -124,110 +229,243 @@ void setupRTC()
   RTC.squareWave(SQWAVE_NONE);
 }
 
-void updateRTCDateTime(time_t dt)
+boolean rtc_set_time_from_payload()
 {
-  // Set RTC clock to the specified date/time.
-  RTC.set(dt);  
-}
 
-void setupDateTimeClient() 
-{
-  radio.begin();  
-  radio.setPALevel(RF24_PA_MAX);        // Maximum transmission power.
-  radio.setAutoAck(true);               // Automatic acknowledgement.
-  
-  radio.setDataRate(RF24_250KBPS);      // Default: RF24_1MBPS.   Value: RF24_2MBPS, RF24_1MBPS, RF24_250KBPS
-  radio.setChannel(1);                  // Default: 76            Minimum 1. Maximum 125.  
-  radio.setPayloadSize(10);             // Default: 32.           Maximum 32 bytes. 0 means dynamic payload size.
-  radio.setCRCLength(RF24_CRC_16);      // Default: RF24_CRC_16.  Other values: RF24_CRC_DISABLED = 0, RF24_CRC_8
-  radio.setRetries(5, 15);              // Default: 5, 15         5 usec delay, 15 retries.
-  radio.openWritingPipe(txaddr);
-  radio.openReadingPipe(1, rxaddr);
-  radio.stopListening();
-  
-  Serial.println("RF24 Details:");
-  radio.printDetails();  
-}
-
-
-time_t receiveDateTime() 
-{
   tmElements_t tm;
   time_t result;
-  boolean timed_out = false;
-  unsigned long started;
-  int timeouts = 0;
 
-  // Start RF24 radio listining ...
-  radio.startListening();
-  
-  while (true) 
+  // Check the signature 0xfe followed by "TIME" (0x54, 0x49, 0x4d, 0x45)
+  if (payload[0] == 0xfe && payload[1] == 0x54 && payload[2] == 0x49 && payload[3] == 0x4d && payload[4] == 0x45) 
   {
+    
+    // Extract date/time data from payload.
+    tm.Year = (payload[6] << 8 | payload[5]) - 1970;
+    tm.Month = payload[7];
+    tm.Day = payload[8];
+    tm.Hour = payload[9];
+    tm.Minute = payload[10];
+    tm.Second = payload[11];
+    tm.Wday = payload[12] % 7 + 1;
+    
+    // Create time_t structure from date/time elements.
+    result = makeTime(tm);
 
-    // Prepare checking if data has been received.
-    timed_out = false;
-    started = millis();
-
-    // Check if data has been received. Timeout after 200 ms.
-    while (!radio.available()) 
-    {
-      if (millis() - started > 200) 
-      {
-          timed_out = true;
-          break;
-      }
-    }
-
-    if (!timed_out) 
-    {
-      // Data has been received, so copy them into payload buffer.
-      radio.read(&payload, sizeof(payload));
-
-      // Check the signature "tim" (0x74, 0x69, 0x6d)
-      if (payload[0] == 0x74 && payload[1] == 0x69 && payload[2] == 0x6d) 
-      {
-
-        // Create date/time structure.
-        tm.Year = (payload[3] << 8 | payload[4]) - 1970;
-        tm.Month = payload[5];
-        tm.Day = payload[6];
-        tm.Hour = payload[7];
-        tm.Minute = payload[8];
-        tm.Second = payload[9];
-
-        // Make time_t
-        result = makeTime(tm);
-        
-        Serial.print("\nReceived: "); printDateTime(result);
-        Serial.println();
-
-        // Return result.
-        return result;    
-      } 
-      else
-      {
-        Serial.println("\nInvalid payload received.");
-      }
-    }
-    else
-    {
-      Serial.print(".");
-      timeouts++;
-      if (timeouts >= 25)
-      {
-        Serial.println();
-        timeouts = 0;
-      }
-    }
-  } 
-} 
-
-void printDateTime(time_t dt)
-{
-  Serial.print(year(dt)); Serial.print("-");
-  Serial.print((month(dt) < 10) ? "0" : "");  Serial.print(month(dt));  Serial.print("-");
-  Serial.print((day(dt) < 10) ? "0" : "");    Serial.print(day(dt));    Serial.print(" ");
-  Serial.print((hour(dt) < 10) ? "0" : "");   Serial.print(hour(dt));   Serial.print(':');
-  Serial.print((minute(dt) < 10) ? "0" : ""); Serial.print(minute(dt)); Serial.print(':');
-  Serial.print((second(dt) < 10) ? "0" : ""); Serial.print(second(dt));  
+    // Update the RTC clock with date/time.
+    RTC.set(result);
+    
+    return true;
+  }
+  else
+  {
+    return false;
+  }
 }
+
+
+//
+// Utilities for flashing LED.
+//
+
+void flash_led(int count, int ms)
+{
+  for (int i = 0; i < count; i++)
+  {
+    digitalWrite(PIN_LED, HIGH);
+    delay(ms);
+    digitalWrite(PIN_LED, LOW);
+    delay(ms);      
+  }  
+}
+
+void flash_led(int count, int onms, int offms)
+{
+  for (int i = 0; i < count; i++)
+  {
+    digitalWrite(PIN_LED, HIGH);
+    delay(onms);
+    digitalWrite(PIN_LED, LOW);
+    delay(offms);      
+  }    
+}
+
+//
+// Functions for debugging low-power NRF24L01 solutions.
+//
+
+void debug_begin()
+{
+  #ifdef DEBUG_PRINT
+  Serial.begin(9600);
+  #endif
+  #ifdef __PRINTF_H__
+  printf_begin();
+  #endif
+  
+}
+
+void debug_print(byte n)
+{
+  #ifdef DEBUG_PRINT
+  Serial.print(n);
+  #endif
+}
+
+void debug_print(char n)
+{
+  #ifdef DEBUG_PRINT
+  Serial.print(n);
+  #endif
+}
+
+void debug_print(short n)
+{
+  #ifdef DEBUG_PRINT
+  Serial.print(n);
+  #endif
+}
+
+void debug_print(int n)
+{
+  #ifdef DEBUG_PRINT
+  Serial.print(n);
+  #endif
+}
+
+void debug_print(unsigned int n)
+{
+  #ifdef DEBUG_PRINT
+  Serial.print(n);
+  #endif
+}
+
+void debug_print(long n)
+{
+  #ifdef DEBUG_PRINT
+  Serial.print(n);
+  #endif
+}
+
+
+void debug_print(float n)
+{
+  #ifdef DEBUG_PRINT
+  Serial.print(n);
+  #endif
+}
+
+void debug_print(double n)
+{
+  #ifdef DEBUG_PRINT
+  Serial.print(n);
+  #endif
+}
+
+void debug_print(const char* s)
+{
+  #ifdef DEBUG_PRINT
+  Serial.print(s);
+  #endif    
+}
+
+void debug_println()
+{
+  #ifdef DEBUG_PRINT
+  Serial.println();
+  #endif  
+}
+
+void debug_println(byte n)
+{
+  #ifdef DEBUG_PRINT
+  Serial.println(n);
+  #endif    
+}
+
+void debug_println(char n)
+{
+  #ifdef DEBUG_PRINT
+  Serial.println(n);
+  #endif    
+}
+
+void debug_println(short n)
+{
+  #ifdef DEBUG_PRINT
+  Serial.println(n);
+  #endif    
+}
+
+void debug_println(int n)
+{
+  #ifdef DEBUG_PRINT
+  Serial.println(n);
+  #endif    
+}
+
+void debug_println(unsigned int n)
+{
+  #ifdef DEBUG_PRINT
+  Serial.println(n);
+  #endif    
+}
+
+void debug_println(long n)
+{
+  #ifdef DEBUG_PRINT
+  Serial.println(n);
+  #endif    
+}
+
+void debug_println(float n)
+{
+  #ifdef DEBUG_PRINT
+  Serial.println(n);
+  #endif    
+}
+
+void debug_println(double n)
+{
+  #ifdef DEBUG_PRINT
+  Serial.println(n);
+  #endif    
+}
+
+void debug_println(const char* s)
+{
+  #ifdef DEBUG_PRINT
+  Serial.println(s);
+  #endif  
+}
+
+#ifdef __RF24_H__
+void debug_nrf24_details(RF24 r)
+{
+  #ifdef __PRINTF_H__
+  r.printDetails();
+  #endif
+}
+#endif
+
+#ifdef _Time_h
+void debug_print(time_t t)
+{
+    // Print year-month-day.
+    debug_print(year(t)); debug_print("-");
+    debug_print(month(t) < 10 ? "0" : ""); debug_print(month(t)); debug_print("-");
+    debug_print(day(t) < 10 ? "0" : ""); debug_print(day(t)); 
+
+    debug_print(" ");
+    
+    // Print time.
+    debug_print(hour(t) < 10 ? "0" : ""); debug_print(hour(t)); debug_print(':');
+    debug_print(minute(t) < 10 ? "0" : ""); debug_print(minute(t)); debug_print(':');
+    debug_print(second(t) < 10 ? "0" : ""); debug_print(second(t));    
+}
+
+void debug_println(time_t t)
+{
+  debug_print(t);
+  debug_println();
+}
+#endif
