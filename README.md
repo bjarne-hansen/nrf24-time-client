@@ -18,7 +18,13 @@ The server has been implemented in Python and uses the pigpiod Python client mod
 installation of the pigpiod daemon on the Raspberry PI.
 
 Please refer to the following link for further information about the server: 
+
 https://github.com/bjarne-hansen/nrf24-time-server
+
+If you are just curious about the Python code for using NRF24L01 modules, you can find more information here:
+
+https://github.com/bjarne-hansen/py-nrf24
+
  
     Wiring:
 
