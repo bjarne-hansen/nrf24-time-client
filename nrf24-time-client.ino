@@ -72,10 +72,10 @@
 #include <TimeLib.h>
 #include <DS3232RTC.h>
 
+#define DEBUG_PRINT
+
 #include "debug_util.h"
 #include "led_util.h"
-
-#define DEBUG_PRINT
 
 #define PIN_LED        8
 #define PIN_RF24_CSN   9
@@ -88,7 +88,7 @@ byte payload[32];                       // Buffer for payload.
 time_t last_sync;                       // Time for last synchronisation.
 
 void setup() {
-
+  
   // Initialise ...
   debug_init();  
   debugln("\n\nInitialising nrf24-time-client.");
