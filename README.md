@@ -2,7 +2,7 @@
  
 Example code showing an Arduino client receiving date/time updates via a NRF24L01 transiever. 
  
-It it intended for constrained Arduino style IoT devices that may not be connected to the Internet, and as a consequence is not able
+It it intended for constrained Arduino style IoT devices that may not be connected to the Internet, and as a consequence are not able
 to synchronize time using NTP.
  
 A client may get the current date/time every time it boots and use it while operational, or it may use the date/time received to
